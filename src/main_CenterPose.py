@@ -123,7 +123,7 @@ if __name__ == '__main__':
     opt = opt.parser.parse_args()
 
     # Local configuration
-    opt.c = 'bike'
+    opt.c = 'fan'
     opt.arch='dlav1_34'
     opt.obj_scale = True
     opt.obj_scale_weight = 1
@@ -134,11 +134,11 @@ if __name__ == '__main__':
     opt.num_epochs = 140
     opt.val_intervals = 5
     opt.lr_step = '90,120'
-    opt.batch_size = 16
+    opt.batch_size = 512
     opt.lr = 6e-5
-    opt.gpus = '0'
-    opt.num_workers = 4
-    opt.print_iter = 5
+    opt.gpus = '0,1,2,3,4,5,6,7'
+    opt.num_workers = 52
+    opt.print_iter = 1
     opt.debug = 5
     opt.save_all = True
 

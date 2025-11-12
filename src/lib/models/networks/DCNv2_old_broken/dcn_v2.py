@@ -11,7 +11,7 @@ from torch.nn.modules.utils import _pair
 from torch.autograd.function import once_differentiable
 from mmcv.ops import ModulatedDeformConv2d
 
-# import _ext as _backend
+import _ext as _backend
 
 
 # class _DCNv2(Function):
@@ -121,7 +121,7 @@ class DCNv2(nn.Module):
         # 定義 offset 和 mask 的生成層
         self.conv_offset_mask = nn.Conv2d(
             in_channels=in_channels,
-            out_channels=deformable_groups * 3 * kernel_size[0] * kernel_size[1],
+            out_channels=deformable_groups * 3 * kernel_size * kernel_size,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
@@ -146,7 +146,9 @@ class DCNv2(nn.Module):
         x = self.deform_conv(x, offset, mask)
         return x
 
+
 class DCN(DCNv2):
+
     def __init__(self, in_channels, out_channels,
                  kernel_size, stride, padding,
                  dilation=1, deformable_groups=1):
@@ -167,47 +169,16 @@ class DCN(DCNv2):
         self.conv_offset_mask.bias.data.zero_()
 
     def forward(self, input):
-        # 計算 offset 和 mask
         out = self.conv_offset_mask(input)
         o1, o2, mask = torch.chunk(out, 3, dim=1)
         offset = torch.cat((o1, o2), dim=1)
         mask = torch.sigmoid(mask)
-
-        # 使用 ModulatedDeformConv2d
-        return self.deform_conv(input, offset, mask)
-
-# class DCN(DCNv2):
-
-#     def __init__(self, in_channels, out_channels,
-#                  kernel_size, stride, padding,
-#                  dilation=1, deformable_groups=1):
-#         super(DCN, self).__init__(in_channels, out_channels,
-#                                   kernel_size, stride, padding, dilation, deformable_groups)
-
-#         channels_ = self.deformable_groups * 3 * self.kernel_size[0] * self.kernel_size[1]
-#         self.conv_offset_mask = nn.Conv2d(self.in_channels,
-#                                           channels_,
-#                                           kernel_size=self.kernel_size,
-#                                           stride=self.stride,
-#                                           padding=self.padding,
-#                                           bias=True)
-#         self.init_offset()
-
-#     def init_offset(self):
-#         self.conv_offset_mask.weight.data.zero_()
-#         self.conv_offset_mask.bias.data.zero_()
-
-#     def forward(self, input):
-#         out = self.conv_offset_mask(input)
-#         o1, o2, mask = torch.chunk(out, 3, dim=1)
-#         offset = torch.cat((o1, o2), dim=1)
-#         mask = torch.sigmoid(mask)
-#         return dcn_v2_conv(input, offset, mask,
-#                            self.weight, self.bias,
-#                            self.stride,
-#                            self.padding,
-#                            self.dilation,
-#                            self.deformable_groups)
+        return dcn_v2_conv(input, offset, mask,
+                           self.weight, self.bias,
+                           self.stride,
+                           self.padding,
+                           self.dilation,
+                           self.deformable_groups)
 
 
 

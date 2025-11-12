@@ -1061,6 +1061,7 @@ class ObjectPoseDataset(data.Dataset):
 
                     # Todo: Currently, normalized by y axis (up)
                     if self.opt.obj_scale:
+                        ann['scale']= np.array([0.2, 0.07, 0.22])
                         if self.opt.use_absolute_scale:
                             scale[id_symmetry, k] = np.abs(ann['scale'])
                         else:
