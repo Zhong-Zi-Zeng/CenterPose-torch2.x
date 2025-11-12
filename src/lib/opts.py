@@ -22,6 +22,7 @@ class opts(object):
         self.parser.add_argument('--dataset', default='objectron',
                                  help='objectron')
         self.parser.add_argument('--exp_id', default='default')
+        self.parser.add_argument('--local-rank', type=int, default=0, help='Local rank for distributed training')
         self.parser.add_argument('--test', action='store_true')  # run on validation dataset
         self.parser.add_argument('--debug', type=int, default=1,
                                  help='level of visualization.'

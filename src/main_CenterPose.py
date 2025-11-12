@@ -10,6 +10,9 @@ import os
 
 import torch
 import torch.utils.data
+import torch.distributed as dist  
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler  
 from lib.opts import opts
 from lib.models.model import create_model, load_model, save_model
 from lib.models.data_parallel import DataParallel
@@ -29,90 +32,114 @@ def main(opt):
     Dataset = ObjectPoseDataset
 
     opt = opts().update_dataset_info_and_set_heads(opt, Dataset)
-    print(opt)
+    if opt.rank == 0:  
+        print(opt)  
+        logger = Logger(opt) 
 
-    logger = Logger(opt)
+    if opt.rank == 0:
+        print('Creating model...')    
+    model = create_model(opt.arch, opt.heads, opt.head_conv, opt=opt)  
+    model = model.to(opt.device)  
+      
+    optimizer = torch.optim.Adam(model.parameters(), opt.lr)  
+    start_epoch = 0  
+    if opt.load_model != '':  
+        model, optimizer, start_epoch = load_model(  
+            model, opt.load_model, optimizer, opt.resume, opt.lr, opt.lr_step)  
+      
+    if opt.distributed:  
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank,  
+                   find_unused_parameters=True)  
+      
+    Trainer = train_factory[opt.task]  
+    trainer = Trainer(opt, model, optimizer)  
+      
+    if not opt.distributed:  
+        trainer.set_device(opt.gpus, opt.chunk_sizes, opt.device) 
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = opt.gpus_str
-    opt.device = torch.device('cuda' if opt.gpus[0] >= 0 else 'cpu')
+    if opt.rank == 0:
+        print('Setting up data...')
+    val_dataset = Dataset(opt, 'val')  
+    train_dataset = Dataset(opt, 'train')  
+      
+    if opt.distributed:  
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)  
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)  
+    else:  
+        train_sampler = None  
+        val_sampler = None  
+      
+    train_loader = torch.utils.data.DataLoader(  
+        train_dataset,  
+        batch_size=opt.batch_size,  
+        shuffle=(train_sampler is None),  
+        sampler=train_sampler,  
+        num_workers=opt.num_workers,  
+        pin_memory=True,  
+        drop_last=True,  
+        collate_fn=collate_fn_filtered  
+    )  
+      
+    val_loader = torch.utils.data.DataLoader(  
+        val_dataset,  
+        batch_size=1,  
+        shuffle=False,  
+        sampler=val_sampler,  
+        num_workers=0,  
+        pin_memory=True,  
+        collate_fn=collate_fn_filtered  
+    ) 
 
-    print('Creating model...')
-    model = create_model(opt.arch, opt.heads, opt.head_conv, opt=opt)
-    optimizer = torch.optim.Adam(model.parameters(), opt.lr)
-    start_epoch = 0
-    if opt.load_model != '':
-        model, optimizer, start_epoch = load_model(
-            model, opt.load_model, optimizer, opt.resume, opt.lr, opt.lr_step)
-
-    Trainer = train_factory[opt.task]
-    trainer = Trainer(opt, model, optimizer)
-    trainer.set_device(opt.gpus, opt.chunk_sizes, opt.device)
-
-    print('Setting up data...')
-    val_dataset = Dataset(opt, 'val')
-    if opt.tracking_task == True:
-        val_dataset_subset = torch.utils.data.Subset(val_dataset, range(0, len(val_dataset), 15))
-    else:
-        val_dataset_subset = val_dataset
-
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset_subset,
-        batch_size=1,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=True,
-        collate_fn=collate_fn_filtered
-    )
-
-    if opt.test:
-        _, preds, _ = trainer.val(0, val_loader)
-
-    train_loader = torch.utils.data.DataLoader(
-        Dataset(opt, 'train'),
-        batch_size=opt.batch_size,
-        shuffle=True,
-        num_workers=opt.num_workers,
-        pin_memory=True,
-        drop_last=True,
-        collate_fn=collate_fn_filtered
-    )
-
-    print('Starting training...')
+    if opt.rank == 0:
+        print('Starting training...')
     best = 1e10
-    for epoch in range(start_epoch + 1, opt.num_epochs + 1):
-        mark = epoch if opt.save_all else 'last'
-        log_dict_train, _, log_imgs = trainer.train(epoch, train_loader)
-        logger.write('epoch: {} | '.format(epoch))  # txt logging
-        for k, v in log_dict_train.items():
-            logger.scalar_summary('train_{}'.format(k), v, epoch)  # tensorboard logging
-            logger.write('train_{} {:8f} | '.format(k, v))  # txt logging
-        logger.img_summary('train', log_imgs, epoch)
-        if opt.val_intervals > 0 and epoch % opt.val_intervals == 0:
-            save_model(os.path.join(opt.save_dir, f'{opt.c}_{mark}.pth'),
-                       epoch, model, optimizer)
-            with torch.no_grad():
-                log_dict_val, preds, log_imgs = trainer.val(epoch, val_loader)
-            for k, v in log_dict_val.items():
-                logger.scalar_summary('val_{}'.format(k), v, epoch)
-                logger.write('val_{} {:8f} | '.format(k, v))
-            logger.img_summary('val', log_imgs, epoch)
-            if log_dict_val[opt.metric] < best:
-                best = log_dict_val[opt.metric]
-                save_model(os.path.join(opt.save_dir, f'{opt.c}_best.pth'),
-                           epoch, model)
+    for epoch in range(start_epoch + 1, opt.num_epochs + 1):  
+        if opt.distributed and train_sampler is not None:  
+            train_sampler.set_epoch(epoch)  
+          
+        mark = epoch if opt.save_all else 'last'  
+        log_dict_train, _, log_imgs = trainer.train(epoch, train_loader)  
+          
+        # 只在主進程進行日誌和儲存  
+        if opt.rank == 0:  
+            logger.write('epoch: {} | '.format(epoch))  
+            for k, v in log_dict_train.items():  
+                logger.scalar_summary('train_{}'.format(k), v, epoch)  
+                logger.write('train_{} {:8f} | '.format(k, v))  
+            logger.img_summary('train', log_imgs, epoch)  
+              
+            if opt.val_intervals > 0 and epoch % opt.val_intervals == 0:  
+                # 儲存時需要使用 model.module 來獲取原始模型  
+                save_model(os.path.join(opt.save_dir, f'{opt.c}_{mark}.pth'),  
+                          epoch, model.module if opt.distributed else model, optimizer)  
+                  
+                with torch.no_grad():  
+                    log_dict_val, preds, log_imgs = trainer.val(epoch, val_loader)  
+                  
+                for k, v in log_dict_val.items():  
+                    logger.scalar_summary('val_{}'.format(k), v, epoch)  
+                    logger.write('val_{} {:8f} | '.format(k, v))  
+                logger.img_summary('val', log_imgs, epoch)  
+                  
+                if log_dict_val[opt.metric] < best:  
+                    best = log_dict_val[opt.metric]  
+                    save_model(os.path.join(opt.save_dir, f'{opt.c}_best.pth'),  
+                              epoch, model.module if opt.distributed else model) 
             # else:
             save_model(os.path.join(opt.save_dir, f'{opt.c}_last.pth'),
-                       epoch, model, optimizer)
-        logger.write('\n\n')
+                       epoch, model, optimizer)        
 
         if epoch in opt.lr_step:
             save_model(os.path.join(opt.save_dir, f'{opt.c}_{epoch}.pth'),
                        epoch, model, optimizer)
             lr = opt.lr * (0.1 ** (opt.lr_step.index(epoch) + 1))
-            print('Drop LR to', lr)
+            if opt.rank == 0:
+                print('Drop LR to', lr)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
-    logger.close()
+
+    if opt.rank == 0:
+        logger.close()
 
 
 if __name__ == '__main__':
@@ -121,6 +148,8 @@ if __name__ == '__main__':
     # Default params with commandline input
     opt = opts()
     opt = opt.parser.parse_args()
+
+    opt.distributed = int(os.environ.get('WORLD_SIZE', 1)) > 1
 
     # Local configuration
     opt.c = 'fan'
@@ -137,10 +166,24 @@ if __name__ == '__main__':
     opt.batch_size = 512
     opt.lr = 6e-5
     opt.gpus = '0,1,2,3,4,5,6,7'
-    opt.num_workers = 52
+    opt.num_workers = 4
     opt.print_iter = 1
     opt.debug = 5
     opt.save_all = True
+
+    if opt.distributed:  
+        dist.init_process_group(backend='nccl')  
+        local_rank = int(os.environ['LOCAL_RANK'])  
+        torch.cuda.set_device(local_rank)  
+        opt.device = torch.device(f'cuda:{local_rank}')  
+        opt.rank = dist.get_rank()  
+        opt.world_size = dist.get_world_size()  
+        opt.batch_size = opt.batch_size // int(os.environ.get('WORLD_SIZE', 1))
+    else:  
+        opt.device = torch.device('cuda' if opt.gpus[0] >= 0 else 'cpu')  
+        opt.rank = 0  
+        opt.world_size = 1 
+        
 
     # # To continue
     # opt.resume = True
@@ -154,7 +197,8 @@ if __name__ == '__main__':
     opt.test_scales = [float(i) for i in opt.test_scales.split(',')]
 
     opt.fix_res = not opt.keep_res
-    print('Fix size testing.' if opt.fix_res else 'Keep resolution testing.')
+    if opt.rank == 0:
+        print('Fix size testing.' if opt.fix_res else 'Keep resolution testing.')
     opt.reg_offset = not opt.not_reg_offset
     opt.reg_bbox = not opt.not_reg_bbox
     opt.hm_hp = not opt.not_hm_hp
@@ -168,16 +212,17 @@ if __name__ == '__main__':
     if opt.trainval:
         opt.val_intervals = 100000000
 
-    if opt.master_batch_size == -1:
-        opt.master_batch_size = opt.batch_size // len(opt.gpus)
-    rest_batch_size = (opt.batch_size - opt.master_batch_size)
-    opt.chunk_sizes = [opt.master_batch_size]
-    for i in range(len(opt.gpus) - 1):
-        slave_chunk_size = rest_batch_size // (len(opt.gpus) - 1)
-        if i < rest_batch_size % (len(opt.gpus) - 1):
-            slave_chunk_size += 1
-        opt.chunk_sizes.append(slave_chunk_size)
-    print('training chunk_sizes:', opt.chunk_sizes)
+    if not opt.distributed:  
+        if opt.master_batch_size == -1:  
+            opt.master_batch_size = opt.batch_size // len(opt.gpus)  
+        rest_batch_size = (opt.batch_size - opt.master_batch_size)  
+        opt.chunk_sizes = [opt.master_batch_size]  
+        for i in range(len(opt.gpus) - 1):  
+            slave_chunk_size = rest_batch_size // (len(opt.gpus) - 1)  
+            if i < rest_batch_size % (len(opt.gpus) - 1):  
+                slave_chunk_size += 1  
+            opt.chunk_sizes.append(slave_chunk_size)  
+        print('training chunk_sizes:', opt.chunk_sizes)
 
     opt.root_dir = os.path.join(os.path.dirname(__file__), '..')
     opt.data_dir = os.path.join(opt.root_dir, 'data')
@@ -186,6 +231,7 @@ if __name__ == '__main__':
     time_str = time.strftime('%Y-%m-%d-%H-%M')
     opt.save_dir = os.path.join(opt.exp_dir, f'{opt.exp_id}_{time_str}')
     opt.debug_dir = os.path.join(opt.save_dir, 'debug')
-    print('The output will be saved to ', opt.save_dir)
+    if opt.rank == 0:
+        print('The output will be saved to ', opt.save_dir)
 
     main(opt)
