@@ -1,3 +1,30 @@
+# Artifact
 /demo
 /data
-*pyc
+
+# Python compiled files
+*.pyc
+*.pyo
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

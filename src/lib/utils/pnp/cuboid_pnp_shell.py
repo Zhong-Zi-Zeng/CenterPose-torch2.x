@@ -63,6 +63,8 @@ def pnp_shell(opt, meta, bbox, points_filtered, scale, OPENCV_RETURN = False):
                 num_not_visible_thresh = 6
             if opt.c in ['camera', 'bottle', 'cup']:
                 num_not_visible_thresh = 3
+            else:
+                num_not_visible_thresh = 3
 
             num_not_visible = 0
             for i in projected_points:

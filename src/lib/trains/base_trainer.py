@@ -61,8 +61,6 @@ class BaseTrainer(object):
         if phase == 'train':
             model_with_loss.train()
         else:
-            if len(self.opt.gpus) > 1:
-                model_with_loss = self.model_with_loss.module
             model_with_loss.eval()
             torch.cuda.empty_cache()
 

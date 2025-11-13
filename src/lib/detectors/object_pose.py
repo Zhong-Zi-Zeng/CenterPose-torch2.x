@@ -315,7 +315,6 @@ class ObjectPoseDetector(BaseDetector):
                         # Todo: A temporary location, need updates
                         debugger.add_obj_scale([20, 20, 0, 0], bbox['obj_scale'], img_id='out_img_pred')
         # debugger.show_all_imgs(pause=self.pause)
-        debugger.show_all_imgs(pause=self.pause)
 
     def save_results_eval(self, debugger, image, results, image_or_path_or_tensor, dict_out=None, video_layout=False):
         debugger.add_img(image, img_id='out_img_pred')

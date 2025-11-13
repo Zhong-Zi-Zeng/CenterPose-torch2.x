@@ -180,7 +180,7 @@ if __name__ == '__main__':
         opt.world_size = dist.get_world_size()  
         opt.batch_size = opt.batch_size // int(os.environ.get('WORLD_SIZE', 1))
     else:  
-        opt.device = torch.device('cuda' if opt.gpus[0] >= 0 else 'cpu')  
+        opt.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  
         opt.rank = 0  
         opt.world_size = 1 
         

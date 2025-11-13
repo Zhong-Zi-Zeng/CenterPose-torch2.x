@@ -974,6 +974,19 @@ class ObjectPoseDataset(data.Dataset):
             # Todo: Fixed as 0 for now
             cls_id = 0
             pts_ori = np.array(ann['projected_cuboid'])
+            
+            # Transfomation DOPE cuboid order to CenterPose
+            pts_ori_ct = np.zeros_like(pts_ori)
+            pts_ori_ct[0] = pts_ori[8]
+            pts_ori_ct[1] = pts_ori[7]
+            pts_ori_ct[2] = pts_ori[3]
+            pts_ori_ct[3] = pts_ori[4]
+            pts_ori_ct[4] = pts_ori[0]
+            pts_ori_ct[5] = pts_ori[6]
+            pts_ori_ct[6] = pts_ori[2]
+            pts_ori_ct[7] = pts_ori[5]
+            pts_ori_ct[8] = pts_ori[1]
+            pts_ori = np.copy(pts_ori_ct)
 
             # Only apply rotation on gt annotation when symmetry exists
             for id_symmetry in range(num_symmetry):
@@ -1061,7 +1074,7 @@ class ObjectPoseDataset(data.Dataset):
 
                     # Todo: Currently, normalized by y axis (up)
                     if self.opt.obj_scale:
-                        ann['scale']= np.array([0.2, 0.07, 0.22])
+                        ann['scale']= np.array([0.2, 0.22, 0.07])
                         if self.opt.use_absolute_scale:
                             scale[id_symmetry, k] = np.abs(ann['scale'])
                         else:
